@@ -32,16 +32,23 @@ config BCMDHD_WEXT
 	help
 	  Enables WEXT support
 
-config BCMDHD_DISABLE_ARP_OFFLOAD_SUPPORT
-	bool "Disable ARP offload support."
+config DHD_USE_STATIC_BUF
+	bool "Enable memory preallocation"
 	depends on BCMDHD
-	help
-	  Forces ARP offload support to be disabled for Broadcom 4329/30
-	  wireless cards.
+	default n
+	---help---
+	  Use memory preallocated in platform
 
-config BCMDHD_DISABLE_PKT_FILTER_SUPPORT
-	bool "Disable Packet Filter support."
-	depends on BCMDHD
-	help
-	  Forces Packet Filter support to be disabled for Broadcom 4329/30
-	  wireless cards.
+config DHD_USE_SCHED_SCAN
+	bool "Use CFG80211 sched scan"
+	depends on BCMDHD && CFG80211
+	default n
+	---help---
+	  Use CFG80211 sched scan
+
+config DHD_ENABLE_P2P
+	bool "Enable Wifi Direct"
+	depends on BCMDHD && CFG80211
+	default n
+	---help---
+	  Use Enable Wifi Direct

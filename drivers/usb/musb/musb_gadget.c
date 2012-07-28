@@ -330,28 +330,9 @@ static void txstate(struct musb *musb, struct musb_request *req)
 
 	musb_ep = req->ep;
 
-	/* Check if EP is disabled */
-	if (!musb_ep->desc) {
-		dev_dbg(musb->controller, "ep:%s disabled - ignore request\n",
-						musb_ep->end_point.name);
-		return;
-	}
-
 	/* we shouldn't get here while DMA is active ... but we do ... */
 	if (dma_channel_status(musb_ep->dma) == MUSB_DMA_STATUS_BUSY) {
 		dev_dbg(musb->controller, "dma pending...\n");
-		return;
-	}
-
-	/*
-	 * the dma might have been nuked asynchronously from the irq handler.
-	 * nuke() cancelled the dma, but the interrupt might already
-	 * have been pending but held off by the spinlock.  nuke() sets
-	 * dma to NULL so if we don't check here, we'll crash when
-	 * computing request_size.
-	 */
-	if (musb_ep->dma == NULL) {
-		dev_dbg(musb->controller, "dma cancelled...\n");
 		return;
 	}
 
@@ -595,6 +576,15 @@ void musb_g_tx(struct musb *musb, u8 epnum)
 
 		if (request->actual == request->length) {
 			musb_g_giveback(musb_ep, request, 0);
+			/*
+			 * In the giveback function the MUSB lock is
+			 * released and acquired after sometime. During
+			 * this time period the INDEX register could get
+			 * changed by the gadget_queue function especially
+			 * on SMP systems. Reselect the INDEX to be sure
+			 * we are reading/modifying the right registers
+			 */
+			musb_ep_select(mbase, epnum);
 			req = musb_ep->desc ? next_request(musb_ep) : NULL;
 			if (!req) {
 				dev_dbg(musb->controller, "%s idle now\n",
@@ -661,13 +651,6 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 		musb_ep = &hw_ep->ep_out;
 
 	len = musb_ep->packet_sz;
-
-	/* Check if EP is disabled */
-	if (!musb_ep->desc) {
-		dev_dbg(musb->controller, "ep:%s disabled - ignore request\n",
-						musb_ep->end_point.name);
-		return;
-	}
 
 	/* We shouldn't get here while DMA is active, but we do... */
 	if (dma_channel_status(musb_ep->dma) == MUSB_DMA_STATUS_BUSY) {
@@ -1002,6 +985,15 @@ void musb_g_rx(struct musb *musb, u8 epnum)
 		}
 #endif
 		musb_g_giveback(musb_ep, request, 0);
+		/*
+		 * In the giveback function the MUSB lock is
+		 * released and acquired after sometime. During
+		 * this time period the INDEX register could get
+		 * changed by the gadget_queue function especially
+		 * on SMP systems. Reselect the INDEX to be sure
+		 * we are reading/modifying the right registers
+		 */
+		musb_ep_select(mbase, epnum);
 
 		req = next_request(musb_ep);
 		if (!req)

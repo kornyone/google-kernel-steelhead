@@ -41,6 +41,9 @@ struct dsscomp_gralloc_t {
 	bool programmed;
 };
 
+/* local cache */
+static struct kmem_cache *gsync_cachep;
+
 /* queued gralloc compositions */
 static LIST_HEAD(flip_queue);
 
@@ -105,7 +108,8 @@ static void dsscomp_gralloc_cb(void *data, int status)
 
 		if (gsync->cb_fn)
 			gsync->cb_fn(gsync->cb_arg, 1);
-		kfree(gsync);
+
+		kmem_cache_free(gsync_cachep, gsync);
 	}
 }
 
@@ -145,18 +149,6 @@ int dsscomp_gralloc_queue_ioctl(struct dsscomp_setup_dispc_data *d)
 	return ret;
 }
 
-static bool dsscomp_is_any_device_active()
-{
-	struct omap_dss_device *dssdev;
-	u32 display_ix;
-	for (display_ix = 0 ; display_ix < cdev->num_displays ; display_ix++) {
-		dssdev = cdev->displays[display_ix];
-		if (dssdev && dssdev->state == OMAP_DSS_DISPLAY_ACTIVE)
-			return true;
-	}
-	return false;
-}
-
 int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 			struct tiler_pa_info **pas,
 			bool early_callback,
@@ -176,7 +168,7 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 #ifdef CONFIG_DEBUG_FS
 	u32 ms = ktime_to_ms(ktime_get());
 #endif
-	int channels[ARRAY_SIZE(d->mgrs)], ch;
+	u32 channels[ARRAY_SIZE(d->mgrs)], ch;
 	int skip;
 	struct dsscomp_gralloc_t *gsync;
 	struct dss2_rect_t win = { .w = 0 };
@@ -192,8 +184,16 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 
 	mutex_lock(&mtx);
 
-	/* create sync object with 1 temporary ref */
-	gsync = kzalloc(sizeof(*gsync), GFP_KERNEL);
+	/* allocate sync object with 1 temporary ref */
+	gsync = kmem_cache_zalloc(gsync_cachep, GFP_KERNEL);
+	if (!gsync) {
+		mutex_unlock(&mtx);
+		mutex_unlock(&local_mtx);
+		pr_err("DSSCOMP: %s: can't allocate object from cache\n",
+								__func__);
+		BUG();
+	}
+
 	gsync->cb_arg = cb_arg;
 	gsync->cb_fn = cb_fn;
 	gsync->refs.counter = 1;
@@ -223,7 +223,7 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 	memset(comp, 0, sizeof(comp));
 	memset(ovl_new_use_mask, 0, sizeof(ovl_new_use_mask));
 
-	if (skip || !dsscomp_is_any_device_active())
+	if (skip)
 		goto skip_comp;
 
 	d->mode = DSSCOMP_SETUP_DISPLAY;
@@ -231,10 +231,8 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 	/* mark managers we are using */
 	for (i = 0; i < d->num_mgrs; i++) {
 		/* verify display is valid & connected, ignore if not */
-		if (d->mgrs[i].ix >= cdev->num_displays) {
-			channels[i] = -1;
+		if (d->mgrs[i].ix >= cdev->num_displays)
 			continue;
-		}
 		dev = cdev->displays[d->mgrs[i].ix];
 		if (!dev) {
 			dev_warn(DEV(cdev), "failed to get display%d\n",
@@ -263,7 +261,7 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 		mgr = cdev->mgrs[ch];
 
 		comp[ch] = dsscomp_new(mgr);
-		if (IS_ERR_OR_NULL(comp[ch])) {
+		if (IS_ERR(comp[ch])) {
 			comp[ch] = NULL;
 			dev_warn(DEV(cdev), "failed to get composition on %s\n",
 								mgr->name);
@@ -288,8 +286,6 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 	/* configure manager data from gralloc composition */
 	for (i = 0; i < d->num_mgrs; i++) {
 		ch = channels[i];
-		if ((ch == -1) || !comp[ch])
-			continue;
 		r = dsscomp_set_mgr(comp[ch], d->mgrs + i);
 		if (r)
 			dev_err(DEV(cdev), "failed to set mgr%d (%d)\n", ch, r);
@@ -310,7 +306,7 @@ int dsscomp_gralloc_queue(struct dsscomp_setup_dispc_data *d,
 		ch = channels[mgr_ix];
 
 		/* skip overlays on compositions we could not create */
-		if ((ch == -1) || !comp[ch])
+		if (!comp[ch])
 			continue;
 
 		/* swap red & blue if requested */
@@ -606,6 +602,15 @@ void dsscomp_gralloc_init(struct dsscomp_dev *cdev_)
 		/* reset free_slots if no TILER memory could be reserved */
 		if (!i)
 			ZERO(free_slots);
+	}
+
+	/* create cache at first time */
+	if (!gsync_cachep) {
+		gsync_cachep = kmem_cache_create("gsync_cache",
+					sizeof(struct dsscomp_gralloc_t), 0,
+						SLAB_HWCACHE_ALIGN, NULL);
+		if (!gsync_cachep)
+			pr_err("DSSCOMP: %s: can't create cache\n", __func__);
 	}
 }
 

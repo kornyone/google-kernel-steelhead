@@ -63,9 +63,6 @@ static int turbo_mode = true;
 module_param(turbo_mode, bool, 0644);
 MODULE_PARM_DESC(turbo_mode, "Enable multiple frames per Rx transaction");
 
-static char *mac_addr;
-module_param(mac_addr, charp, S_IRUGO);
-
 static int smsc95xx_read_reg(struct usbnet *dev, u32 index, u32 *data)
 {
 	u32 *buf = kmalloc(4, GFP_KERNEL);
@@ -603,27 +600,6 @@ static int smsc95xx_ioctl(struct net_device *netdev, struct ifreq *rq, int cmd)
 	return generic_mii_ioctl(&dev->mii, if_mii(rq), cmd, NULL);
 }
 
-static int ethernet_get_mac_addr(u8 *buf)
-{
-	int addr[ETH_ALEN];
-	int i;
-
-	if (!buf || !mac_addr)
-		return -EINVAL;
-
-	pr_info("%s: raw mac_addr %s\n", __func__, mac_addr);
-	if (sscanf(mac_addr, "%x:%x:%x:%x:%x:%x", &addr[0], &addr[1],
-		   &addr[2], &addr[3], &addr[4], &addr[5]) == 6) {
-		for (i = 0; i < ETH_ALEN; i++) {
-			if (addr[i] > 0xff)
-				break;
-			buf[i] = addr[i];
-		}
-		return 0;
-	}
-	return -EINVAL;
-}
-
 static void smsc95xx_init_mac_address(struct usbnet *dev)
 {
 	/* try reading mac address from EEPROM */
@@ -636,14 +612,9 @@ static void smsc95xx_init_mac_address(struct usbnet *dev)
 		}
 	}
 
-	/* use mac address configured by module_param, or else
-	 * generate a random one.
-	 */
-	if (ethernet_get_mac_addr(dev->net->dev_addr)) {
-		random_ether_addr(dev->net->dev_addr);
-		netif_dbg(dev, ifup, dev->net,
-			  "MAC address set to random_ether_addr\n");
-	}
+	/* no eeprom, or eeprom values are invalid. generate random MAC */
+	random_ether_addr(dev->net->dev_addr);
+	netif_dbg(dev, ifup, dev->net, "MAC address set to random_ether_addr\n");
 }
 
 static int smsc95xx_set_mac_address(struct usbnet *dev)
@@ -1045,10 +1016,6 @@ static int smsc95xx_bind(struct usbnet *dev, struct usb_interface *intf)
 	dev->net->ethtool_ops = &smsc95xx_ethtool_ops;
 	dev->net->flags |= IFF_MULTICAST;
 	dev->net->hard_header_len += SMSC95XX_TX_OVERHEAD_CSUM;
-
-	/* initialize link status */
-	mii_check_media(&dev->mii, 1, 1);
-
 	return 0;
 }
 
@@ -1223,7 +1190,7 @@ static const struct driver_info smsc95xx_info = {
 	.rx_fixup	= smsc95xx_rx_fixup,
 	.tx_fixup	= smsc95xx_tx_fixup,
 	.status		= smsc95xx_status,
-	.flags		= FLAG_ETHER | FLAG_SEND_ZLP,
+	.flags		= FLAG_ETHER | FLAG_SEND_ZLP | FLAG_LINK_INTR,
 };
 
 static const struct usb_device_id products[] = {

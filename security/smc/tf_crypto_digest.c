@@ -151,25 +151,12 @@ static const u8 sha256OverEmptyString[] = {
 static void tf_digest_hw_perform_64b(u32 *data,
 				u32 algo, u32 bytes_processed);
 static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
-				u32 algo, u32 bytes_processed,
-				unsigned int buffer_origin);
+				u32 algo, u32 bytes_processed);
 
 static bool tf_digest_update_dma(
 	struct tf_crypto_sha_operation_state *sha_state,
-	u8 *data, u32 data_length, unsigned int buffer_origin);
+	u8 *data, u32 data_length);
 
-/*------------------------------------------------------------------------- */
-
-static unsigned long tf_cpy_from(
-void *to, const void *from, unsigned long n, unsigned int buffer_origin)
-{
-	if (buffer_origin == TF_BUFFER_KERNEL) {
-		memcpy(to, from, n);
-		return 0;
-	} else {
-		return copy_from_user(to, from, n);
-	}
-}
 
 /*-------------------------------------------------------------------------
  *Save HWA registers into the specified operation state structure
@@ -177,7 +164,8 @@ void *to, const void *from, unsigned long n, unsigned int buffer_origin)
 static void tf_digest_save_registers(
 	struct tf_crypto_sha_operation_state *sha_state)
 {
-	dpr_info("%s: State=%p\n", __func__, sha_state);
+	dprintk(KERN_INFO "tf_digest_save_registers: State=%p\n",
+		sha_state);
 
 	sha_state->SHA_DIGEST_A = INREG32(&sha1_md5_reg->IDIGEST_A);
 	sha_state->SHA_DIGEST_B = INREG32(&sha1_md5_reg->IDIGEST_B);
@@ -195,7 +183,8 @@ static void tf_digest_save_registers(
 static void tf_digest_restore_registers(
 	struct tf_crypto_sha_operation_state *sha_state)
 {
-	dpr_info("%s: State=%p\n", __func__, sha_state);
+	dprintk(KERN_INFO "tf_digest_restore_registers: State=%p\n",
+		sha_state);
 
 	if (sha_state->bytes_processed != 0) {
 		/*
@@ -230,7 +219,7 @@ void tf_digest_exit(void)
 }
 
 bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
-	u8 *data, u32 data_length, unsigned int buffer_origin)
+	u8 *data, u32 data_length)
 {
 	u32 dma_use = PUBLIC_CRYPTO_DMA_USE_NONE;
 
@@ -240,13 +229,15 @@ bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
 	if (data_length >= DMA_TRIGGER_IRQ_DIGEST)
 		dma_use = PUBLIC_CRYPTO_DMA_USE_IRQ;
 
-	dpr_info("%s: Data=0x%08x/%u, Chunk=%u, Processed=%u, dma_use=0x%08x\n",
-		__func__, (u32)data, (u32)data_length,
+	dprintk(KERN_INFO "tf_digest_update : "\
+		"Data=0x%08x/%u, Chunk=%u, Processed=%u, dma_use=0x%08x\n",
+		(u32)data, (u32)data_length,
 		sha_state->chunk_length, sha_state->bytes_processed,
 		dma_use);
 
 	if (data_length == 0) {
-		dpr_info("%s: Nothing to process\n", __func__);
+		dprintk(KERN_INFO "tf_digest_update: "\
+				"Nothing to process\n");
 		return true;
 	}
 
@@ -258,8 +249,7 @@ bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
 		tf_digest_restore_registers(sha_state);
 
 		/*perform the updates with DMA */
-		if (!tf_digest_update_dma(
-			sha_state, data, data_length, buffer_origin))
+		if (!tf_digest_update_dma(sha_state, data, data_length))
 			return false;
 
 		/* Save the accelerator registers into the operation state */
@@ -284,11 +274,10 @@ bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
 
 			/*So we fill the chunk buffer with the new data to
 			 *complete to 64B */
-			if (tf_cpy_from(
+			if (copy_from_user(
 				sha_state->chunk_buffer+sha_state->chunk_length,
 				data,
-				vLengthToComplete,
-				buffer_origin))
+				vLengthToComplete))
 				return false;
 
 			if (sha_state->chunk_length + data_length ==
@@ -296,8 +285,9 @@ bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
 				/*We'll keep some data for the final */
 				sha_state->chunk_length =
 					HASH_BLOCK_BYTES_LENGTH;
-				dpr_info("%s: Done: Chunk=%u; Processed=%u\n",
-					__func__, sha_state->chunk_length,
+				dprintk(KERN_INFO "tf_digest_update: "\
+					"Done: Chunk=%u; Processed=%u\n",
+					sha_state->chunk_length,
 					sha_state->bytes_processed);
 				return true;
 			}
@@ -342,11 +332,10 @@ bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
 				 */
 				/*We copy the data to process to an aligned
 				 *buffer */
-				if (tf_cpy_from(
+				if (copy_from_user(
 					pTempAlignedBuffer,
 					data,
-					HASH_BLOCK_BYTES_LENGTH,
-					buffer_origin))
+					HASH_BLOCK_BYTES_LENGTH))
 					return false;
 
 				/*Then we send this buffer to the hash
@@ -379,18 +368,18 @@ bool tf_digest_update(struct tf_crypto_sha_operation_state *sha_state,
 
 			/*So we fill the chunk buffer with the new data to
 			 *complete to 64B */
-			if (tf_cpy_from(
+			if (copy_from_user(
 				sha_state->chunk_buffer+sha_state->chunk_length,
 				data,
-				data_length,
-				buffer_origin))
+				data_length))
 				return false;
 			sha_state->chunk_length += data_length;
 		}
 	}
 
-	dpr_info("%s: Done: Chunk=%u; Processed=%u\n",
-		__func__, sha_state->chunk_length, sha_state->bytes_processed);
+	dprintk(KERN_INFO "tf_digest_update: Done: "\
+		"Chunk=%u; Processed=%u\n",
+		sha_state->chunk_length, sha_state->bytes_processed);
 
 	return true;
 }
@@ -454,8 +443,7 @@ static void tf_digest_hw_perform_64b(u32 *data,
 /*------------------------------------------------------------------------- */
 
 static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
-			u32 algo, u32 bytes_processed,
-			unsigned int buffer_origin)
+			u32 algo, u32 bytes_processed)
 {
 	/*
 	 *Note: The DMA only sees physical addresses !
@@ -465,33 +453,17 @@ static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
 	struct omap_dma_channel_params ch0_parameters;
 	u32 length_loop = 0;
 	u32 algo_constant;
-	u8 *local_buf = NULL;
-	dma_addr_t local_buf_phys;
 	struct tf_device *dev = tf_get_device();
-	bool ret = true;
 
-	dpr_info(
-		"%s: Buffer=0x%08x/%u\n",
-		__func__, (u32)data, (u32)nDataLength);
+	dprintk(KERN_INFO
+		"tf_digest_hw_perform_dma: Buffer=0x%08x/%u\n",
+		(u32)data, (u32)nDataLength);
 
 	/*lock the DMA */
-	if (!mutex_trylock(&dev->sm.dma_mutex)) {
-		local_buf = dma_alloc_coherent(NULL, dev->dma_buffer_length,
-			&local_buf_phys, GFP_KERNEL);
-		if (local_buf == NULL) {
-			printk(KERN_ERR "SMC: DMA buffer is already taken "
-				"and %s could not allocate a temporary one\n",
-				__func__);
-			return false;
-		}
-	} else {
-		local_buf = dev->dma_buffer;
-		local_buf_phys = dev->dma_buffer_phys;
-	}
-
+	mutex_lock(&dev->sm.dma_mutex);
 	if (tf_dma_request(&dma_ch0) != PUBLIC_CRYPTO_OPERATION_SUCCESS) {
-		ret = false;
-		goto exit;
+		mutex_unlock(&dev->sm.dma_mutex);
+		return false;
 	}
 
 	while (nDataLength > 0) {
@@ -514,10 +486,10 @@ static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
 		 * buffer which has correct properties from efficient DMA
 		 * transfers.
 		 */
-		if (tf_cpy_from(local_buf, data, length_loop, buffer_origin)) {
+		if (copy_from_user(dev->dma_buffer, data, length_loop)) {
 			omap_free_dma(dma_ch0);
-			ret = false;
-			goto exit;
+			mutex_unlock(&dev->sm.dma_mutex);
+			return false;
 		}
 
 		/*DMA1: Mem -> HASH */
@@ -525,7 +497,7 @@ static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
 			length_loop / HASH_BLOCK_BYTES_LENGTH,
 			DMA_CEN_Elts_per_Frame_SHA,
 			DIGEST1_REGS_HW_ADDR + 0x80,
-			local_buf_phys,
+			dev->dma_buffer_phys,
 			OMAP44XX_DMA_SHA2_DIN_P);
 
 		/*specific for Mem -> HWA */
@@ -568,10 +540,12 @@ static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
 	}
 
 	/*For safety reasons, let's clean the working buffer */
-	memset(local_buf, 0, length_loop);
+	memset(dev->dma_buffer, 0, length_loop);
 
 	/*release the DMA */
 	omap_free_dma(dma_ch0);
+
+	mutex_unlock(&dev->sm.dma_mutex);
 
 	/*
 	 * The dma transfert is finished, now wait until the hash
@@ -581,14 +555,7 @@ static bool tf_digest_hw_perform_dma(u8 *data, u32 nDataLength,
 		(u32 *)&sha1_md5_reg->IRQSTATUS,
 		DIGEST_IRQSTATUS_CONTEXT_READY_BIT);
 
-exit:
-	if (dev->dma_buffer == local_buf)
-		mutex_unlock(&dev->sm.dma_mutex);
-	else
-		dma_free_coherent(NULL, dev->dma_buffer_length,
-			local_buf, local_buf_phys);
-
-	return ret;
+	return true;
 }
 
 /*------------------------------------------------------------------------- */
@@ -601,9 +568,9 @@ exit:
  */
 static bool tf_digest_update_dma(
 	struct tf_crypto_sha_operation_state *sha_state,
-	u8 *data, u32 data_length, unsigned int buffer_origin)
+	u8 *data, u32 data_length)
 {
-	dpr_info("%s\n", __func__);
+	dprintk(KERN_INFO "tf_digest_update_dma\n");
 
 	if (sha_state->chunk_length != 0) {
 
@@ -614,9 +581,9 @@ static bool tf_digest_update_dma(
 			chunk_length + data_length <= HASH_BLOCK_BYTES_LENGTH) {
 
 			/*So we fill the chunk buffer with the new data */
-			if (tf_cpy_from(sha_state->chunk_buffer +
+			if (copy_from_user(sha_state->chunk_buffer +
 					sha_state->chunk_length, data,
-					data_length, buffer_origin))
+					data_length))
 				return false;
 			sha_state->chunk_length += data_length;
 
@@ -630,9 +597,9 @@ static bool tf_digest_update_dma(
 		if (vLengthToComplete != 0) {
 			/*So we fill the chunk buffer with the new data to
 			 *complete to 64B */
-			if (tf_cpy_from(sha_state->chunk_buffer +
+			if (copy_from_user(sha_state->chunk_buffer +
 					sha_state->chunk_length, data,
-					vLengthToComplete, buffer_origin))
+					vLengthToComplete))
 				return false;
 		}
 
@@ -664,8 +631,7 @@ static bool tf_digest_update_dma(
 		}
 
 		if (!tf_digest_hw_perform_dma(data, vDmaProcessize,
-				sha_state->CTRL, sha_state->bytes_processed,
-				buffer_origin))
+				sha_state->CTRL, sha_state->bytes_processed))
 			return false;
 
 		sha_state->bytes_processed =
@@ -680,8 +646,7 @@ static bool tf_digest_update_dma(
 		return false;
 
 	/*We now fill the chunk buffer with the remaining data */
-	if (tf_cpy_from(
-		sha_state->chunk_buffer, data, data_length, buffer_origin))
+	if (copy_from_user(sha_state->chunk_buffer, data, data_length))
 		return false;
 	sha_state->chunk_length = data_length;
 
@@ -728,24 +693,6 @@ static int static_Hash_HwReadDigest(u32 algo, u8 *out)
 		out[idx++] = (u8) ((tmp >> 24) & 0xff);
 	}
 
-#ifdef CONFIG_TF_DRIVER_FAULT_INJECTION
-#define FAULTY(mask, ctrl_algo, alg_name) \
-	(((mask) & TF_CRYPTO_ALG_##alg_name) && \
-	 (ctrl_algo) == DIGEST_CTRL_ALGO_##alg_name)
-	if (FAULTY(tf_fault_injection_mask, algo, MD5) ||
-	    FAULTY(tf_fault_injection_mask, algo, SHA1) ||
-	    FAULTY(tf_fault_injection_mask, algo, SHA224) ||
-	    FAULTY(tf_fault_injection_mask, algo, SHA256)) {
-		pr_notice("TF: injecting fault in digest!\n");
-		out[0] = 0xff;
-		out[1] ^= 0xff;
-	} else {
-		dpr_info("%s: no fault "
-			 "(mask=0x%x algo=%u)\n",
-			 __func__, tf_fault_injection_mask, algo);
-	}
-#undef FAULTY
-#endif /* CONFIG_TF_DRIVER_FAULT_INJECTION */
 	return 0;
 }
 
@@ -826,20 +773,23 @@ static int tf_digest_final(struct tf_crypto_sha_operation_state *state,
  * Digest HWA registration into kernel crypto framework
  */
 
-static DEFINE_SPINLOCK(digest_lock);
-
 static int digest_update(struct shash_desc *desc, const u8 *data,
 	unsigned int len)
 {
 	struct tf_crypto_sha_operation_state *state = shash_desc_ctx(desc);
 
+	/* Make sure SHA/MD5 HWA is accessible */
+	tf_delayed_secure_resume();
+
+	tf_crypto_lock_hwa(PUBLIC_CRYPTO_HWA_SHA, LOCK_HWA);
+
 	tf_crypto_enable_clock(PUBLIC_CRYPTO_SHA2MD5_CLOCK_REG);
 
-	spin_lock(&digest_lock);
-	tf_digest_update(state, (u8 *) data, len, TF_BUFFER_KERNEL);
-	spin_unlock(&digest_lock);
+	tf_digest_update(state, (u8 *) data, len);
 
 	tf_crypto_disable_clock(PUBLIC_CRYPTO_SHA2MD5_CLOCK_REG);
+
+	tf_crypto_lock_hwa(PUBLIC_CRYPTO_HWA_SHA, UNLOCK_HWA);
 
 	return 0;
 }
@@ -849,13 +799,18 @@ static int digest_final(struct shash_desc *desc, u8 *out)
 	int ret;
 	struct tf_crypto_sha_operation_state *state = shash_desc_ctx(desc);
 
+	/* Make sure SHA/MD5 HWA is accessible */
+	tf_delayed_secure_resume();
+
+	tf_crypto_lock_hwa(PUBLIC_CRYPTO_HWA_SHA, LOCK_HWA);
+
 	tf_crypto_enable_clock(PUBLIC_CRYPTO_SHA2MD5_CLOCK_REG);
 
-	spin_lock(&digest_lock);
 	ret = tf_digest_final(state, out);
-	spin_unlock(&digest_lock);
 
 	tf_crypto_disable_clock(PUBLIC_CRYPTO_SHA2MD5_CLOCK_REG);
+
+	tf_crypto_lock_hwa(PUBLIC_CRYPTO_HWA_SHA, UNLOCK_HWA);
 
 	return ret;
 }
@@ -996,7 +951,7 @@ int register_smc_public_crypto_digest(void)
 {
 	int ret;
 
-	dpr_info("SMC: Registering digest algorithms\n");
+	dprintk(KERN_INFO "SMC: Registering digest algorithms\n");
 
 	ret = crypto_register_shash(&smc_md5_alg);
 	if (ret)
@@ -1027,7 +982,7 @@ sha1_err:
 
 void unregister_smc_public_crypto_digest(void)
 {
-	dpr_info("SMC: Unregistering digest algorithms\n");
+	dprintk(KERN_INFO "SMC: Unregistering digest algorithms\n");
 
 	crypto_unregister_shash(&smc_md5_alg);
 	crypto_unregister_shash(&smc_sha1_alg);

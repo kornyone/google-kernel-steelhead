@@ -360,6 +360,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 		 * card has the Enhanced area enabled.  If so, export enhanced
 		 * area offset and size to user by adding sysfs interface.
 		 */
+		card->ext_csd.raw_partition_support = ext_csd[EXT_CSD_PARTITION_SUPPORT];
 		if ((ext_csd[EXT_CSD_PARTITION_SUPPORT] & 0x2) &&
 		    (ext_csd[EXT_CSD_PARTITION_ATTRIBUTE] & 0x1)) {
 			u8 hc_erase_grp_sz =
@@ -406,6 +407,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	if (card->ext_csd.rev >= 5)
 		card->ext_csd.rel_param = ext_csd[EXT_CSD_WR_REL_PARAM];
 
+	card->ext_csd.raw_erased_mem_count = ext_csd[EXT_CSD_ERASED_MEM_CONT];
 	if (ext_csd[EXT_CSD_ERASED_MEM_CONT])
 		card->erased_byte = 0xFF;
 	else
@@ -483,21 +485,6 @@ out:
 	return err;
 }
 
-#ifdef CONFIG_MMC_SAMSUNG_SMART
-static ssize_t mmc_samsung_smart(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct mmc_card *card = mmc_dev_to_card(dev);
-
-	if (card->quirks & MMC_QUIRK_SAMSUNG_SMART)
-		return mmc_samsung_smart_handle(card, buf);
-
-	/* There is no information available for this card. */
-	return 0;
-}
-static DEVICE_ATTR(samsung_smart, S_IRUGO, mmc_samsung_smart, NULL);
-#endif /* CONFIG_MMC_SAMSUNG_SMART */
-
 MMC_DEV_ATTR(cid, "%08x%08x%08x%08x\n", card->raw_cid[0], card->raw_cid[1],
 	card->raw_cid[2], card->raw_cid[3]);
 MMC_DEV_ATTR(csd, "%08x%08x%08x%08x\n", card->raw_csd[0], card->raw_csd[1],
@@ -529,9 +516,6 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_serial.attr,
 	&dev_attr_enhanced_area_offset.attr,
 	&dev_attr_enhanced_area_size.attr,
-#ifdef CONFIG_MMC_SAMSUNG_SMART
-	&dev_attr_samsung_smart.attr,
-#endif
 	NULL,
 };
 
@@ -566,14 +550,6 @@ static const struct mmc_fixup mmc_fixups[] = {
 	MMC_FIXUP_REV("MAG4FA", 0x15, CID_OEMID_ANY,
 		      cid_rev(0, 0x25, 1997, 1), cid_rev(0, 0x25, 2012, 12),
 		      add_quirk_mmc, MMC_QUIRK_SAMSUNG_WL_PATCH),
-#ifdef CONFIG_MMC_SAMSUNG_SMART
-	MMC_FIXUP("VYL00M", 0x15, CID_OEMID_ANY,
-		      add_quirk_mmc, MMC_QUIRK_SAMSUNG_SMART),
-	MMC_FIXUP("KYL00M", 0x15, CID_OEMID_ANY,
-		      add_quirk_mmc, MMC_QUIRK_SAMSUNG_SMART),
-	MMC_FIXUP("MAG4FA", 0x15, CID_OEMID_ANY,
-		      add_quirk_mmc, MMC_QUIRK_SAMSUNG_SMART),
-#endif
 	END_FIXUP
 };
 
@@ -880,7 +856,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			 *
 			 * WARNING: eMMC rules are NOT the same as SD DDR
 			 */
-			if (ddr == EXT_CSD_CARD_TYPE_DDR_1_2V) {
+			if (ddr == MMC_1_2V_DDR_MODE) {
 				err = mmc_set_signal_voltage(host,
 					MMC_SIGNAL_VOLTAGE_120, 0);
 				if (err)
@@ -951,6 +927,7 @@ static void mmc_detect(struct mmc_host *host)
 
 		mmc_claim_host(host);
 		mmc_detach_bus(host);
+		mmc_power_off(host);
 		mmc_release_host(host);
 	}
 }

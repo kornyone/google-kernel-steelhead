@@ -45,6 +45,7 @@
 
 #include "../clockdomain.h"
 #include "dss.h"
+#include "gammatable.h"
 #include "dss_features.h"
 #include "dispc.h"
 
@@ -2162,8 +2163,8 @@ int dispc_scaling_decision(u16 width, u16 height,
 		if (!can_scale)
 			goto loop;
 
-		if (out_width < in_width / maxdownscale ||
-			out_height < in_height / maxdownscale)
+		if (out_width * maxdownscale < in_width ||
+			out_height * maxdownscale < in_height)
 			goto loop;
 
 		/* Use 5-tap filter unless must use 3-tap */
@@ -2442,18 +2443,10 @@ int dispc_setup_plane(enum omap_plane plane,
 	_dispc_setup_global_alpha(plane, global_alpha);
 
 	if (cpu_is_omap44xx()) {
-#if !defined(CONFIG_OMAP2_HDMI_DEFAULT_DISPLAY)
 		fifo_low = dispc_calculate_threshold(plane, paddr + offset0,
 				   puv_addr + offset0, width, height,
 				   row_inc, pix_inc);
 		fifo_high = dispc_get_plane_fifo_size(plane) - 1;
-#else
-		u32 size;
-		size = dispc_get_plane_fifo_size(plane);
-
-		default_get_overlay_fifo_thresholds(plane, size,
-				&size, &fifo_low, &fifo_high);
-#endif
 		dispc_setup_plane_fifo(plane, fifo_low, fifo_high);
 	}
 
@@ -2800,6 +2793,53 @@ bool dispc_trans_key_enabled(enum omap_channel ch)
 		BUG();
 
 	return enabled;
+}
+
+/* valid inputs for gamma are from 1 to 10 that map
+  from 0.2 to 2.2 gamma values and 0 for disabled */
+int dispc_enable_gamma(enum omap_channel ch, u8 gamma)
+{
+#ifdef CONFIG_ARCH_OMAP4
+	bool enabled;
+	u32 i, temp, channel;
+	static bool enable[MAX_DSS_MANAGERS];
+
+	enabled = enable[ch];
+
+	switch (ch) {
+	case OMAP_DSS_CHANNEL_LCD:
+		channel = 0;
+		break;
+	case OMAP_DSS_CHANNEL_LCD2:
+		channel = 1;
+		break;
+	case OMAP_DSS_CHANNEL_DIGIT:
+		channel = 2;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (gamma > NO_OF_GAMMA_TABLES || gamma < 0)
+		return -EINVAL;
+
+	if (gamma) {
+		u8 *tablePtr = gamma_table[gamma - 1];
+
+		for (i = 0; i < GAMMA_TBL_SZ; i++) {
+			temp =  tablePtr[i];
+			temp =  (i<<24)|(temp|(temp<<8)|(temp<<16));
+			dispc_write_reg(DISPC_GAMMA_TABLE + (channel*4), temp);
+		}
+	}
+	enabled = enabled & ~(1 << channel) | (gamma ? (1 << channel) : 0);
+	REG_FLD_MOD(DISPC_CONFIG, (enabled & 1), 3, 3);
+	REG_FLD_MOD(DISPC_CONFIG, !!(enabled & 6), 9, 9);
+
+	enable[ch] = enabled;
+
+#endif
+	return 0;
 }
 
 

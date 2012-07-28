@@ -94,7 +94,6 @@ struct omap_dm_timer {
 	unsigned posted:1;
 	unsigned is_early_init:1;
 	unsigned needs_manual_reset:1;
-	unsigned highlanderIP:1;
 	spinlock_t lock;
 	u8 func_offset;
 	u8 intr_offset;
@@ -156,18 +155,7 @@ int omap_dm_timer_write_counter(struct omap_dm_timer *timer,
 	unsigned int value);
 
 int omap_dm_timers_active(void);
+void omap_dm_timer_save_context(struct omap_dm_timer *timer);
 
-#define OMAP_TIMER_CAPTURE_MODE_SINGLE 0x0
-#define OMAP_TIMER_CAPTURE_MODE_DOUBLE 0x1
-
-#define OMAP_TIMER_CAPTURE_EDGE_NONE    0x0
-#define OMAP_TIMER_CAPTURE_EDGE_RISING  0x1
-#define OMAP_TIMER_CAPTURE_EDGE_FALLING 0x2
-#define OMAP_TIMER_CAPTURE_EDGE_BOTH    0x3
-void omap_dm_timers_set_capture_mode(struct omap_dm_timer *timer,
-		unsigned int capt_mode,
-		unsigned int edges);
-u32 omap_dm_timers_read_capture1(struct omap_dm_timer *timer);
-u32 omap_dm_timers_read_capture2(struct omap_dm_timer *timer);
 
 #endif /* __ASM_ARCH_DMTIMER_H */

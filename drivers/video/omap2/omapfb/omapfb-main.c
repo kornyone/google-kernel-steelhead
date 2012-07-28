@@ -749,32 +749,6 @@ int check_fb_var(struct fb_info *fbi, struct fb_var_screeninfo *var)
 	return 0;
 }
 
-
-bool check_fb_scale(struct omap_dss_device *dssdev)
-{
-	u16 fb_w, fb_h , pn_w , pn_h;
-	struct omap_dss_driver *dssdrv;
-
-	if (dssdev != NULL) {
-		dssdrv = dssdev->driver;
-
-		if (dssdrv != NULL && dssdrv->get_fb_resolution)
-			dssdrv->get_fb_resolution(dssdev, &fb_w, &fb_h);
-		else
-			return false;
-
-		if (dssdrv != NULL && dssdrv->get_resolution)
-			dssdrv->get_resolution(dssdev, &pn_w, &pn_h);
-
-		if (fb_w == pn_w && fb_h == pn_h)
-			return false;
-		else
-			return true;
-
-	}
-	return false;
-}
-
 /*
  * ---------------------------------------------------------------------------
  * fbdev framework callbacks
@@ -950,24 +924,6 @@ int omapfb_setup_overlay(struct fb_info *fbi, struct omap_overlay *ovl,
 	info.out_width = outw;
 	info.out_height = outh;
 
-	/*
-	 * Don't allow these to be zero or else we'll get
-	 * a divide by zero when the overlay is enabled.
-	 */
-	if (!info.max_x_decim)
-		info.max_x_decim = 255;
-	if (!info.max_y_decim)
-		info.max_y_decim = 255;
-	if (!info.min_x_decim)
-		info.min_x_decim = 1;
-	if (!info.min_y_decim)
-		info.min_y_decim = 1;
-
-	/*
-	 * If fb is used directly, set zorder to 0
-	 */
-	info.zorder = 0;
-
 	r = ovl->set_overlay_info(ovl, &info);
 	if (r) {
 		DBG("ovl->setup_overlay_info failed\n");
@@ -991,7 +947,6 @@ int omapfb_apply_changes(struct fb_info *fbi, int init)
 	u16 posx, posy;
 	u16 outw, outh;
 	int i;
-	struct omap_dss_device *display = fb2display(fbi);
 
 #ifdef DEBUG
 	if (omapfb_test_pattern)
@@ -1014,21 +969,14 @@ int omapfb_apply_changes(struct fb_info *fbi, int init)
 		}
 
 		if (init || (ovl->caps & OMAP_DSS_OVL_CAP_SCALE) == 0) {
-			u16 p_width , p_height;
 			int rotation = (var->rotate + ofbi->rotation[i]) % 4;
-			p_width = var->xres;
-			p_height = var->yres;
-			if (display->driver->get_resolution)
-				display->driver->get_resolution(display,
-							 &p_width, &p_height);
-
 			if (rotation == FB_ROTATE_CW ||
 					rotation == FB_ROTATE_CCW) {
-				outw = p_height;
-				outh = p_width;
+				outw = var->yres;
+				outh = var->xres;
 			} else {
-				outw = p_width;
-				outh = p_height;
+				outw = var->xres;
+				outh = var->yres;
 			}
 		} else {
 			outw = ovl->info.out_width;
@@ -1553,10 +1501,7 @@ static int omapfb_alloc_fbmem_display(struct fb_info *fbi, unsigned long size,
 	if (!size) {
 		u16 w, h;
 
-		if (display->driver->get_fb_resolution)
-			display->driver->get_fb_resolution(display, &w, &h);
-		else
-			display->driver->get_resolution(display, &w, &h);
+		display->driver->get_resolution(display, &w, &h);
 
 		if (ofbi->rotation_type == OMAP_DSS_ROT_VRFB) {
 			size = max(omap_vrfb_min_phys_size(w, h, bytespp),
@@ -1874,10 +1819,7 @@ static int omapfb_fb_init(struct omapfb2_device *fbdev, struct fb_info *fbi)
 		u16 w, h;
 		int rotation = (var->rotate + ofbi->rotation[0]) % 4;
 
-		if (display->driver->get_fb_resolution)
-			display->driver->get_fb_resolution(display, &w, &h);
-		else
-			display->driver->get_resolution(display, &w, &h);
+		display->driver->get_resolution(display, &w, &h);
 
 		if (rotation == FB_ROTATE_CW ||
 				rotation == FB_ROTATE_CCW) {
@@ -2260,7 +2202,6 @@ static int omapfb_parse_def_modes(struct omapfb2_device *fbdev)
 			if (strcmp(fbdev->displays[i]->name,
 						display_str) == 0) {
 				display = fbdev->displays[i];
-				fbdev->default_display_id = i;
 				break;
 			}
 		}
@@ -2286,14 +2227,11 @@ static int omapfb_init_display(struct omapfb2_device *fbdev,
 	struct omap_dss_driver *dssdrv = dssdev->driver;
 	int r;
 
-	if (dssdev->state != OMAP_DSS_DISPLAY_ACTIVE) {
-
-		r = dssdrv->enable(dssdev);
-		if (r) {
-			dev_warn(fbdev->dev, "Failed to enable display '%s'\n",
-					dssdev->name);
-			return r;
-		}
+	r = dssdrv->enable(dssdev);
+	if (r) {
+		dev_warn(fbdev->dev, "Failed to enable display '%s'\n",
+				dssdev->name);
+		return r;
 	}
 
 	if (dssdev->caps & OMAP_DSS_DISPLAY_CAP_MANUAL_UPDATE) {
@@ -2399,6 +2337,10 @@ static int omapfb_probe(struct platform_device *pdev)
 		goto cleanup;
 	}
 
+	fbdev->num_overlays = omap_dss_get_num_overlays();
+	for (i = 0; i < fbdev->num_overlays; i++)
+		fbdev->overlays[i] = omap_dss_get_overlay(i);
+
 	fbdev->num_managers = omap_dss_get_num_overlay_managers();
 	for (i = 0; i < fbdev->num_managers; i++)
 		fbdev->managers[i] = omap_dss_get_overlay_manager(i);
@@ -2407,13 +2349,6 @@ static int omapfb_probe(struct platform_device *pdev)
 		if (omapfb_parse_def_modes(fbdev))
 			dev_warn(&pdev->dev, "cannot parse default modes\n");
 	}
-
-	fbdev->num_overlays = omap_dss_get_num_overlays();
-	for (i = 0; i < fbdev->num_overlays; i++)
-		if (check_fb_scale(fbdev->displays[fbdev->default_display_id]))
-			fbdev->overlays[i] = omap_dss_get_overlay(i+1);
-		else
-			fbdev->overlays[i] = omap_dss_get_overlay(i);
 
 	r = omapfb_create_framebuffers(fbdev);
 	if (r)

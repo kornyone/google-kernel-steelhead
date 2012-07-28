@@ -1129,7 +1129,7 @@ static OMAPLFB_ERROR OMAPLFBInitFBDev(OMAPLFB_DEVINFO *psDevInfo)
 	OMAPLFBPrintInfo(psDevInfo);
 
 	/* hijack LINFB */
-#if defined(CONFIG_ION_OMAP) && !defined(CONFIG_OMAP2_HDMI_DEFAULT_DISPLAY)
+#if defined(CONFIG_ION_OMAP)
 	if(1)
 	{
 		/* for some reason we need at least 3 buffers in the swap chain */
@@ -1182,9 +1182,9 @@ static OMAPLFB_ERROR OMAPLFBInitFBDev(OMAPLFB_DEVINFO *psDevInfo)
 		psPVRFBInfo->ulHeight = psLINFBInfo->var.yres;
 		psPVRFBInfo->ulByteStride = PAGE_ALIGN(psPVRFBInfo->ulWidth * psPVRFBInfo->uiBytesPerPixel);
 		w = psPVRFBInfo->ulByteStride >> PAGE_SHIFT;
+
 		/* this is an "effective" FB size to get correct number of buffers */
-		psPVRFBInfo->ulFBSize = sAllocData.h * n *
-		(psPVRFBInfo->ulByteStride + 32-(psLINFBInfo->var.xres%32));
+		psPVRFBInfo->ulFBSize = sAllocData.h * n * psPVRFBInfo->ulByteStride;
 		psPVRFBInfo->psPageList = kzalloc(w * n * psPVRFBInfo->ulHeight * sizeof(*psPVRFBInfo->psPageList), GFP_KERNEL);
 		if (!psPVRFBInfo->psPageList)
 		{

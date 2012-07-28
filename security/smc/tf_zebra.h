@@ -27,21 +27,18 @@ int tf_ctrl_device_register(void);
 int tf_start(struct tf_comm *comm,
 	u32 workspace_addr, u32 workspace_size,
 	u8 *pa_buffer, u32 pa_size,
-	u32 conf_descriptor, u32 conf_offset, u32 conf_size);
+	u8 *properties_buffer, u32 properties_length);
 
 /* Assembler entry points to/from secure */
 u32 schedule_secure_world(u32 app_id, u32 proc_id, u32 flags, u32 args);
 u32 rpc_handler(u32 p1, u32 p2, u32 p3, u32 p4);
+u32 read_mpidr(void);
 
-void tf_clock_timer_init(void);
-void tf_clock_timer_start(void);
-void tf_clock_timer_stop(void);
-u32 tf_try_disabling_secure_hwa_clocks(u32 mask);
+/* L4 SEC clockdomain enabling/disabling */
+void tf_l4sec_clkdm_wakeup(bool wakelock);
+void tf_l4sec_clkdm_allow_idle(bool wakeunlock);
 
-#ifdef MODULE
-extern int __initdata (*tf_comm_early_init)(void);
-int __init tf_device_mshield_init(char *str);
-void __exit tf_device_mshield_exit(void);
-#endif
+/* Delayed secure resume */
+int tf_delayed_secure_resume(void);
 
 #endif /* __TF_ZEBRA_H__ */

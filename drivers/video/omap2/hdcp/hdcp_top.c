@@ -31,7 +31,6 @@
 #include "../../hdmi_ti_4xxx_ip.h"
 #include "../dss/dss.h"
 #include "hdcp.h"
-#include "../../hdmi_ti_4xxx_ip_ddc.h"
 
 struct hdcp hdcp;
 struct hdcp_sha_in sha_input;
@@ -121,7 +120,7 @@ static void hdcp_wq_disable(void)
 
 	hdcp_cancel_work(&hdcp.pending_wq_event);
 	hdcp_lib_disable();
-	ddc.pending_disable = 0;
+	hdcp.pending_disable = 0;
 }
 
 /*-----------------------------------------------------------------------------
@@ -134,8 +133,7 @@ static void hdcp_wq_start_authentication(void)
 
 	hdcp.hdcp_state = HDCP_AUTHENTICATION_START;
 
-	if (hdcp.print_messages)
-		printk(KERN_INFO "HDCP: authentication start\n");
+	printk(KERN_INFO "HDCP: authentication start\n");
 
 	/* Step 1 part 1 (until R0 calc delay) */
 	status = hdcp_lib_step1_start();
@@ -169,8 +167,6 @@ static void hdcp_wq_check_r0(void)
 	} else if (status < 0)
 		hdcp_wq_authentication_failure();
 	else {
-		hdcp.fail_cnt = 0;
-		hdcp.print_messages = 1;
 		if (hdcp_lib_check_repeater_bit_in_tx()) {
 			/* Repeater */
 			printk(KERN_INFO "HDCP: authentication step 1 "
@@ -187,7 +183,6 @@ static void hdcp_wq_check_r0(void)
 			printk(KERN_INFO "HDCP: authentication step 1 "
 					 "successful - Receiver\n");
 
-			hdcp.av_mute_needed = 1;
 			hdcp.hdcp_state = HDCP_LINK_INTEGRITY_CHECK;
 			hdcp.auth_state = HDCP_STATE_AUTH_3RD_STEP;
 
@@ -223,7 +218,6 @@ static void hdcp_wq_step2_authentication(void)
 		printk(KERN_INFO "HDCP: (Repeater) authentication step 2 "
 				 "successful\n");
 
-		hdcp.av_mute_needed = 1;
 		hdcp.hdcp_state = HDCP_LINK_INTEGRITY_CHECK;
 		hdcp.auth_state = HDCP_STATE_AUTH_3RD_STEP;
 
@@ -248,14 +242,13 @@ static void hdcp_wq_authentication_failure(void)
 
 	hdcp_lib_auto_ri_check(false);
 	hdcp_lib_auto_bcaps_rdy_check(false);
-	if (hdcp.av_mute_needed)
-		hdcp_lib_set_av_mute(AV_MUTE_SET);
+	hdcp_lib_set_av_mute(AV_MUTE_SET);
 	hdcp_lib_set_encryption(HDCP_ENC_OFF);
 
 	hdcp_cancel_work(&hdcp.pending_wq_event);
 
 	hdcp_lib_disable();
-	ddc.pending_disable = 0;
+	hdcp.pending_disable = 0;
 
 	if (hdcp.retry_cnt && (hdcp.hdmi_state != HDMI_STOPPED)) {
 		if (hdcp.retry_cnt < HDCP_INFINITE_REAUTH) {
@@ -263,23 +256,9 @@ static void hdcp_wq_authentication_failure(void)
 			printk(KERN_INFO "HDCP: authentication failed - "
 					 "retrying, attempts=%d\n",
 							hdcp.retry_cnt);
-		} else {
-			hdcp.fail_cnt++;
-			if (hdcp.print_messages) {
-				if (hdcp.fail_cnt < HDCP_MAX_FAIL_MESSAGES)
-					printk(KERN_INFO "HDCP: authentication "
-					       "failed - retrying\n");
-				else {
-					hdcp.print_messages = 0;
-					printk(KERN_INFO "HDCP: authentication "
-					       "failed %d consecutive times\n",
-					       hdcp.fail_cnt);
-					printk(KERN_INFO "HDCP: will keep "
-					       "trying but silencing logs "
-					       "until hotplug or success\n");
-				}
-			}
-		}
+		} else
+			printk(KERN_INFO "HDCP: authentication failed - "
+					 "retrying\n");
 
 		hdcp.hdcp_state = HDCP_AUTHENTICATION_START;
 		hdcp.auth_state = HDCP_STATE_AUTH_FAIL_RESTARTING;
@@ -306,8 +285,6 @@ static void hdcp_work_queue(struct work_struct *work)
 	int event = hdcp_w->event;
 
 	mutex_lock(&hdcp.lock);
-
-	hdcp_request_dss();
 
 	DBG("hdcp_work_queue() - START - %u hdmi=%d hdcp=%d auth=%d evt= %x %d"
 	    " hdcp_ctrl=%02x",
@@ -434,7 +411,6 @@ static void hdcp_work_queue(struct work_struct *work)
 		(event & 0xFF00) >> 8,
 		event & 0xFF);
 
-	hdcp_release_dss();
 	mutex_unlock(&hdcp.lock);
 }
 
@@ -531,16 +507,8 @@ static void hdcp_start_frame_cb(void)
 		hdcp_cancel_work(&hdcp.pending_wq_event);
 
 	hdcp.hpd_low = 0;
-	ddc.pending_disable = 0;
+	hdcp.pending_disable = 0;
 	hdcp.retry_cnt = hdcp.en_ctrl->nb_retry;
-	hdcp.fail_cnt = 0;
-	hdcp.av_mute_needed = 0;
-	hdcp.print_messages = 1;
-
-	hdcp.hdmi_state = HDMI_STOPPED;
-	hdcp.hdcp_state = HDCP_ENABLE_PENDING;
-	hdcp.auth_state = HDCP_STATE_DISABLED;
-
 	hdcp.pending_start = hdcp_submit_work(HDCP_START_FRAME_EVENT,
 							HDCP_ENABLE_DELAY);
 }
@@ -576,7 +544,7 @@ static void hdcp_irq_cb(int status)
 	    (hdcp.hdcp_state != HDCP_ENABLE_PENDING)) {
 		if (status & HDMI_HPD_LOW) {
 			hdcp_lib_set_encryption(HDCP_ENC_OFF);
-			ddc_abort();
+			hdcp_ddc_abort();
 		}
 
 		if (status & HDMI_RI_ERR) {
@@ -590,11 +558,10 @@ static void hdcp_irq_cb(int status)
 	}
 
 	if (status & HDMI_HPD_LOW) {
-		ddc.pending_disable = 1;	/* Used to exit on-going HDCP
+		hdcp.pending_disable = 1;	/* Used to exit on-going HDCP
 						 * work */
 		hdcp.hpd_low = 0;		/* Used to cancel HDCP works */
 		hdcp_lib_disable();
-		ddc.pending_disable = 0;
 		/* In case of HDCP_STOP_FRAME_EVENT, HDCP stop
 		 * frame callback is blocked and waiting for
 		 * HDCP driver to finish accessing the HW
@@ -659,7 +626,7 @@ static long hdcp_disable_ctl(void)
 	hdcp_cancel_work(&hdcp.pending_start);
 	hdcp_cancel_work(&hdcp.pending_wq_event);
 
-	ddc.pending_disable = 1;
+	hdcp.pending_disable = 1;
 	/* Post event to workqueue */
 	if (hdcp_submit_work(HDCP_DISABLE_CTL, 0) == 0)
 		return -EFAULT;
@@ -909,33 +876,28 @@ static void hdcp_load_keys_cb(const struct firmware *fw, void *context)
 
 	if (!fw) {
 		pr_err("HDCP: failed to load keys\n");
-		goto out;
+		return;
 	}
 
 	if (fw->size != sizeof(en_ctrl->key)) {
 		pr_err("HDCP: encrypted key file wrong size %d\n", fw->size);
-		goto out;
+		return;
 	}
 
 	en_ctrl = kmalloc(sizeof(*en_ctrl), GFP_KERNEL);
 	if (!en_ctrl) {
 		pr_err("HDCP: can't allocated space for keys\n");
-		goto out;
+		return;
 	}
 
 	memcpy(en_ctrl->key, fw->data, sizeof(en_ctrl->key));
-	en_ctrl->nb_retry = HDCP_INFINITE_REAUTH;
+	en_ctrl->nb_retry = 20;
 
 	hdcp.en_ctrl = en_ctrl;
 	hdcp.retry_cnt = hdcp.en_ctrl->nb_retry;
 	hdcp.hdcp_state = HDCP_ENABLE_PENDING;
 	hdcp.hdcp_keys_loaded = true;
 	pr_info("HDCP: loaded keys\n");
-
-out:
-	/* check hpd state and call handler if hpd is asserted */
-	if (hdmi_get_current_hpd())
-		hdmi_panel_hpd_handler();
 }
 
 static int hdcp_load_keys(void)
@@ -1000,7 +962,7 @@ static int __init hdcp_init(void)
 	hdcp.pending_wq_event = 0;
 	hdcp.retry_cnt = 0;
 	hdcp.auth_state = HDCP_STATE_DISABLED;
-	ddc.pending_disable = 0;
+	hdcp.pending_disable = 0;
 	hdcp.hdcp_up_event = 0;
 	hdcp.hdcp_down_event = 0;
 	hdcp_wait_re_entrance = 0;

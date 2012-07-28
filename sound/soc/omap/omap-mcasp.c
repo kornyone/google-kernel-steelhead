@@ -565,6 +565,13 @@ static int omap_mcasp_setup(struct omap_mcasp *mcasp, unsigned int rate)
 	mcasp_set_bits(mcasp->base + OMAP_MCASP_ACLKXCTL_REG,
 					AHCLKXDIV(aclkxdiv));
 
+	/* Configure McASP formatter */
+	mcasp_mod_bits(mcasp->base + OMAP_MCASP_TXFMT_REG,
+					TXSSZ(SLOTSIZE_32), TXSSZ_MASK);
+	mcasp_mod_bits(mcasp->base + OMAP_MCASP_TXFMT_REG, TXROT(ROTATE_24),
+							TXROT_MASK);
+	mcasp_set_reg(mcasp->base + OMAP_MCASP_TXMASK_REG, 0xFFFF);
+
 	/* Set the TX tdm : for all the slots */
 	mcasp_set_reg(mcasp->base + OMAP_MCASP_TXTDM_REG, 0xFFFFFFFF);
 
@@ -826,6 +833,11 @@ static struct snd_soc_dai_ops omap_mcasp_dai_ops = {
 	.hw_params	= omap_mcasp_hw_params,
 	.ioctl		= omap_mcasp_ioctl,
 };
+
+#define MCASP_RATES	(SNDRV_PCM_RATE_22050 | SNDRV_PCM_RATE_32000 | \
+			 SNDRV_PCM_RATE_44100 | SNDRV_PCM_RATE_48000 | \
+			 SNDRV_PCM_RATE_88200 | SNDRV_PCM_RATE_96000 | \
+			 SNDRV_PCM_RATE_176400 | SNDRV_PCM_RATE_192000)
 
 static struct snd_soc_dai_driver omap_mcasp_dai[] = {
 	{

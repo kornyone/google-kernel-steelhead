@@ -97,7 +97,6 @@ struct omapfb2_device {
 		struct omap_dss_device *dssdev;
 		u8 bpp;
 	} bpp_overrides[10];
-	u16 default_display_id;
 };
 
 struct omapfb_colormode {

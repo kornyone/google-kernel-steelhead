@@ -283,7 +283,8 @@ static void omap_timer_restore_context(struct omap_dm_timer *timer)
 static void __timer_enable(struct omap_dm_timer *timer)
 {
 	if (!timer->enabled) {
-		pm_runtime_get_sync(&timer->pdev->dev);
+		if (timer->loses_context)
+			pm_runtime_get_sync(&timer->pdev->dev);
 		timer->enabled = 1;
 	}
 }
@@ -291,7 +292,8 @@ static void __timer_enable(struct omap_dm_timer *timer)
 static void __timer_disable(struct omap_dm_timer *timer)
 {
 	if (timer->enabled) {
-		pm_runtime_put_sync_suspend(&timer->pdev->dev);
+		if (timer->loses_context)
+			pm_runtime_put_sync_suspend(&timer->pdev->dev);
 		timer->enabled = 0;
 	}
 }
@@ -299,22 +301,12 @@ static void __timer_disable(struct omap_dm_timer *timer)
 static void omap_dm_timer_wait_for_reset(struct omap_dm_timer *timer)
 {
 	int c;
-	u32 reg_address;
-	int reset_active;
-
-	if (timer->highlanderIP) {
-		reg_address = OMAP_TIMER_OCP_CFG_REG;
-		reset_active = 1;
-	} else {
-		reg_address = OMAP_TIMER_SYS_STAT_REG;
-		reset_active = 0;
-	}
 
 	c = 0;
-	while (omap_dm_timer_read_reg(timer, reg_address) == reset_active) {
+	while (!(omap_dm_timer_read_reg(timer, OMAP_TIMER_SYS_STAT_REG) & 1)) {
 		c++;
 		if (c > 100000) {
-			printk(KERN_ERR "%s:Timer failed to reset\n", __func__);
+			printk(KERN_ERR "Timer failed to reset\n");
 			return;
 		}
 	}
@@ -582,8 +574,8 @@ int omap_dm_timer_start(struct omap_dm_timer *timer)
 		return -EINVAL;
 
 	spin_lock_irqsave(&timer->lock, flags);
+	__timer_enable(timer);
 	if (timer->loses_context) {
-		__timer_enable(timer);
 		if (omap_pm_was_context_lost(&timer->pdev->dev) &&
 			timer->context_saved) {
 			omap_timer_restore_context(timer);
@@ -639,8 +631,8 @@ int omap_dm_timer_stop(struct omap_dm_timer *timer)
 	if (timer->loses_context) {
 		omap_timer_save_context(timer);
 		timer->context_saved = true;
-		__timer_disable(timer);
 	}
+	__timer_disable(timer);
 	spin_unlock_irqrestore(&timer->lock, flags);
 	return 0;
 }
@@ -712,8 +704,8 @@ int omap_dm_timer_set_load_start(struct omap_dm_timer *timer, int autoreload,
 		return -EINVAL;
 
 	spin_lock_irqsave(&timer->lock, flags);
+	__timer_enable(timer);
 	if (timer->loses_context) {
-		__timer_enable(timer);
 		if (omap_pm_was_context_lost(&timer->pdev->dev) &&
 			timer->context_saved) {
 			omap_timer_restore_context(timer);
@@ -925,35 +917,11 @@ int omap_dm_timers_active(void)
 }
 EXPORT_SYMBOL_GPL(omap_dm_timers_active);
 
-void omap_dm_timers_set_capture_mode(struct omap_dm_timer *timer,
-				    unsigned int capt_mode,
-				    unsigned int edges)
+void omap_dm_timer_save_context(struct omap_dm_timer *timer)
 {
-	u32 l, m;
-
-	m = l = omap_dm_timer_read_reg(timer, OMAP_TIMER_CTRL_REG);
-	l &= ~(OMAP_TIMER_CTRL_CAPTMODE | OMAP_TIMER_CTRL_TCM_BOTHEDGES);
-	if (capt_mode == OMAP_TIMER_CAPTURE_MODE_DOUBLE)
-		l |= OMAP_TIMER_CTRL_CAPTMODE;
-
-	l |= ((edges & 0x3) << 8);
-	l |= OMAP_TIMER_CTRL_GPOCFG;
-
-	omap_dm_timer_write_reg(timer, OMAP_TIMER_CTRL_REG, l);
+	omap_timer_save_context(timer);
 }
-EXPORT_SYMBOL_GPL(omap_dm_timers_set_capture_mode);
-
-u32 omap_dm_timers_read_capture1(struct omap_dm_timer *timer)
-{
-	return omap_dm_timer_read_reg(timer, OMAP_TIMER_CAPTURE_REG);
-}
-EXPORT_SYMBOL_GPL(omap_dm_timers_read_capture1);
-
-u32 omap_dm_timers_read_capture2(struct omap_dm_timer *timer)
-{
-	return omap_dm_timer_read_reg(timer, OMAP_TIMER_CAPTURE2_REG);
-}
-EXPORT_SYMBOL_GPL(omap_dm_timers_read_capture2);
+EXPORT_SYMBOL_GPL(omap_dm_timer_save_context);
 
 /**
  * omap_dm_timer_probe - probe function called for every registered device
@@ -1011,7 +979,6 @@ static int __devinit omap_dm_timer_probe(struct platform_device *pdev)
 	if (pdata->timer_ip_type == OMAP_TIMER_IP_VERSION_2) {
 		timer->func_offset = VERSION2_TIMER_WAKEUP_EN_REG_OFFSET;
 		timer->intr_offset = VERSION2_TIMER_STAT_REG_OFFSET;
-		timer->highlanderIP = 1;
 	}
 
 	timer->irq = irq->start;

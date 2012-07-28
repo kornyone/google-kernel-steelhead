@@ -217,7 +217,7 @@ static long setup_mgr(struct dsscomp_dev *cdev,
 		return -ENODEV;
 
 	comp = dsscomp_new(mgr);
-	if (IS_ERR_OR_NULL(comp))
+	if (IS_ERR(comp))
 		return PTR_ERR(comp);
 
 	/* swap red & blue if requested */
@@ -468,7 +468,6 @@ static long comp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	{
 		r = copy_from_user(&u.sdis, ptr, sizeof(u.sdis)) ? :
 		    setup_display(cdev, &u.sdis);
-		break;
 	}
 	default:
 		r = -EINVAL;
